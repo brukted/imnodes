@@ -136,8 +136,8 @@ struct NodeData
     ImVector<int> pin_indices;
     bool draggable;
 
-    NodeData()
-        : id(0), origin(100.0f, 100.0f), title_bar_content_rect(),
+    NodeData(const int node_id)
+        : id(node_id), origin(100.0f, 100.0f), title_bar_content_rect(),
           rect(ImVec2(0.0f, 0.0f), ImVec2(0.0f, 0.0f)), color_style(), layout_style(),
           pin_indices(), draggable(true)
     {
@@ -159,8 +159,8 @@ struct PinData
         ImU32 background, hovered;
     } color_style;
 
-    PinData()
-        : id(), parent_node_idx(), attribute_rect(), type(AttributeType_None),
+    PinData(const int pin_id)
+        : id(pin_id), parent_node_idx(), attribute_rect(), type(AttributeType_None),
           shape(PinShape_CircleFilled), pos(), flags(AttributeFlags_None), color_style()
     {
     }
@@ -176,7 +176,7 @@ struct LinkData
         ImU32 base, hovered, selected;
     } color_style;
 
-    LinkData() : id(), start_pin_idx(), end_pin_idx(), color_style() {}
+    LinkData(const int link_id) : id(link_id), start_pin_idx(), end_pin_idx(), color_style() {}
 };
 
 struct LinkPredicate
@@ -914,7 +914,7 @@ int object_pool_find_or_create_index(ObjectPool<T>& objects, const int id)
         if (objects.free_list.empty())
         {
             index = objects.pool.size();
-            objects.pool.push_back(T());
+            objects.pool.push_back(T(id));
             objects.in_use.push_back(true);
         }
         else
@@ -937,7 +937,7 @@ int object_pool_find_or_create_index(ObjectPool<NodeData>& nodes, const int node
         if (nodes.free_list.empty())
         {
             node_idx = nodes.pool.size();
-            nodes.pool.push_back(NodeData());
+            nodes.pool.push_back(NodeData(node_id));
             nodes.in_use.push_back(true);
         }
         else
@@ -1202,7 +1202,7 @@ OptionalIndex find_duplicate_link(
     const int start_pin_idx,
     const int end_pin_idx)
 {
-    LinkData test_link;
+    LinkData test_link(0);
     test_link.start_pin_idx = start_pin_idx;
     test_link.end_pin_idx = end_pin_idx;
     for (int link_idx = 0; link_idx < editor.links.pool.size(); ++link_idx)
@@ -1458,16 +1458,24 @@ OptionalIndex resolve_hovered_node(const EditorContext& editor)
 
 // [SECTION] render helpers
 
-inline ImVec2 screen_space_to_grid_space(const ImVec2& v)
+inline ImVec2 screen_space_to_grid_space(const EditorContext& editor, const ImVec2& v)
 {
-    const EditorContext& editor = editor_context_get();
     return v - g.canvas_origin_screen_space - editor.panning;
 }
 
-inline ImVec2 grid_space_to_editor_space(const ImVec2& v)
+inline ImVec2 grid_space_to_screen_space(const EditorContext& editor, const ImVec2& v)
 {
-    const EditorContext& editor = editor_context_get();
+    return v + g.canvas_origin_screen_space + editor.panning;
+}
+
+inline ImVec2 grid_space_to_editor_space(const EditorContext& editor, const ImVec2& v)
+{
     return v + editor.panning;
+}
+
+inline ImVec2 editor_space_to_grid_space(const EditorContext& editor, const ImVec2& v)
+{
+    return v - editor.panning;
 }
 
 inline ImVec2 editor_space_to_screen_space(const ImVec2& v)
@@ -2162,7 +2170,6 @@ void BeginNode(const int node_id)
     g.current_node_idx = node_idx;
 
     NodeData& node = editor.nodes.pool[node_idx];
-    node.id = node_id;
     node.color_style.background = g.style.colors[ColorStyle_NodeBackground];
     node.color_style.background_hovered = g.style.colors[ColorStyle_NodeBackgroundHovered];
     node.color_style.background_selected = g.style.colors[ColorStyle_NodeBackgroundSelected];
@@ -2177,7 +2184,7 @@ void BeginNode(const int node_id)
     // ImGui::SetCursorPos sets the cursor position, local to the current widget
     // (in this case, the child object started in BeginNodeEditor). Use
     // ImGui::SetCursorScreenPos to set the screen space coordinates directly.
-    ImGui::SetCursorPos(grid_space_to_editor_space(get_node_title_bar_origin(node)));
+    ImGui::SetCursorPos(grid_space_to_editor_space(editor, get_node_title_bar_origin(node)));
 
     draw_list_add_node(node_idx);
     draw_list_activate_current_node_foreground();
@@ -2233,7 +2240,7 @@ void EndNodeTitleBar()
 
     ImGui::ItemAdd(get_node_title_rect(node), ImGui::GetID("title_bar"));
 
-    ImGui::SetCursorPos(grid_space_to_editor_space(get_node_content_origin(node)));
+    ImGui::SetCursorPos(grid_space_to_editor_space(editor, get_node_content_origin(node)));
 }
 
 void BeginInputAttribute(const int id, const PinShape shape)
@@ -2381,7 +2388,14 @@ void SetNodeScreenSpacePos(int node_id, const ImVec2& screen_space_pos)
 {
     EditorContext& editor = editor_context_get();
     NodeData& node = object_pool_find_or_create_object(editor.nodes, node_id);
-    node.origin = screen_space_to_grid_space(screen_space_pos);
+    node.origin = screen_space_to_grid_space(editor, screen_space_pos);
+}
+
+void SetNodeEditorSpacePos(int node_id, const ImVec2& editor_space_pos)
+{
+    EditorContext& editor = editor_context_get();
+    NodeData& node = object_pool_find_or_create_object(editor.nodes, node_id);
+    node.origin = editor_space_to_grid_space(editor, editor_space_pos);
 }
 
 void SetNodeGridSpacePos(int node_id, const ImVec2& grid_pos)
@@ -2398,6 +2412,24 @@ void SetNodeDraggable(int node_id, const bool draggable)
     node.draggable = draggable;
 }
 
+ImVec2 GetNodeScreenSpacePos(const int node_id)
+{
+    EditorContext& editor = editor_context_get();
+    const int node_idx = object_pool_find(editor.nodes, node_id);
+    assert(node_idx != -1);
+    NodeData& node = editor.nodes.pool[node_idx];
+    return grid_space_to_screen_space(editor, node.origin);
+}
+
+ImVec2 GetNodeEditorSpacePos(const int node_id)
+{
+    EditorContext& editor = editor_context_get();
+    const int node_idx = object_pool_find(editor.nodes, node_id);
+    assert(node_idx != -1);
+    NodeData& node = editor.nodes.pool[node_idx];
+    return grid_space_to_editor_space(editor, node.origin);
+}
+
 ImVec2 GetNodeGridSpacePos(int node_id)
 {
     EditorContext& editor = editor_context_get();
@@ -2405,15 +2437,6 @@ ImVec2 GetNodeGridSpacePos(int node_id)
     assert(node_idx != -1);
     NodeData& node = editor.nodes.pool[node_idx];
     return node.origin;
-}
-
-ImVec2 GetNodeScreenSpacePos(const int node_id)
-{
-    EditorContext& editor = editor_context_get();
-    const int node_idx = object_pool_find(editor.nodes, node_id);
-    assert(node_idx != -1);
-    NodeData& node = editor.nodes.pool[node_idx];
-    return grid_space_to_editor_space(node.origin);
 }
 
 bool IsEditorHovered()
